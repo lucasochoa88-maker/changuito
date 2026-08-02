@@ -1,493 +1,608 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>El Changuito — Comparador de Supermercados</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
-<style>
-:root{
-  --bg:#131720; --panel:#1B2130; --panel2:#222A3D; --linea:#2C3550;
-  --texto:#E8EAF0; --texto2:#9AA3B5; --ticket:#F7F4EC; --ticket-tinta:#23262B;
-  --carrefour:#3B82F6; --coto:#E5493C; --jumbo:#2FA84F;
-  --oferta:#FFC53D; --alerta:#FF6B6B; --ok:#3DDC97;
-  --radio:14px; --sombra:0 8px 28px rgba(0,0,0,.35);
+/**
+ * COMPARADOR DE PRECIOS v3 - Carrefour / Coto / Jumbo (Argentina)
+ * Con: configuración automática de pestañas, procesamiento POR LOTES
+ * (evita el límite de 6 min de Google), reintentos anti rate-limit,
+ * multi-marca, categorías con subtotales, medios de pago e histórico.
+ *
+ * PRIMERA VEZ: menú 🛒 Comparador > ⚙️ Configurar planilla.
+ * Crea "Lista" (precargada con tus 40 productos), "MediosPago",
+ * "Comparación" e "Histórico". Después: ▶️ Comparar todo.
+ */
+
+var COTO_KEY = 'key_r6xzz4IAoTWcipni';
+var N_CANDIDATOS = 5;
+var LOTE = 5;                       // productos por lote
+var FORMATO_PRECIO = '$#,##0.00';   // sin separador de miles: '$0.00'
+var STOPWORDS = ['de','en','con','el','la','los','las','y','a','x','por','para','sin',
+                 'clasico','classic','doypack','pet','tetra','botella','sobre','bolsa','bidon','carton','pote'];
+var MARCAS_PROPIAS = ['carrefour','classic','el','mercado','cuisine','co','precio','top'];
+var SUPERS = ['Carrefour', 'Coto', 'Jumbo'];
+
+var SEED = [
+    ["Almacén", "Aceite de girasol", "Aceite de girasol alto omega Carrefour Classic pet 1.5 lts"],
+    ["Almacén", "Aceite en aerosol", "Aceite en aerosol Carrefour classic girasol 150 ml"],
+    ["Almacén", "Ajo granulado", "Ajo granulado Carrefour Classic en sobre 25 grs"],
+    ["Almacén", "Arroz integral", "Arroz integral Luccetti 1 kg."],
+    ["Almacén", "Atún", "Lomito de atún al natural Carrefour Classic 170 grs"],
+    ["Almacén", "Café", "Café tostado molido Morenita 250 grs"],
+    ["Almacén", "Fideos spaghetti", "Fideos spaghetti N7 Lucchetti 500 g."],
+    ["Almacén", "Galletitas de agua", "Galletitas crackers Carrefour classic mini 5 semillas 280 g."],
+    ["Almacén", "Harina 000", "Harina de trigo 000 Chacabuco 1 kg."],
+    ["Almacén", "Harina integral", "Harina integral fina Chacabuco 1 kg."],
+    ["Almacén", "Harina leudante", "Harina leudante Chacabuco 1 kg"],
+    ["Almacén", "Huevos", "Huevo blanco El Mercado carton 30 uni"],
+    ["Almacén", "Levadura", "Levadura seca instantánea Calsa Mi Pan 10 g."],
+    ["Almacén", "Manzanitas de Ali", "Chips de manzana roja Fruch deshidratadas 35 grs"],
+    ["Almacén", "Mayonesa", "Mayonesa Natura 950 g."],
+    ["Almacén", "Pan rayado", "Pan rallado Carrefour classic 1 kg."],
+    ["Almacén", "Polenta", "Polenta instantánea Presto Pronta bolsa 730 g."],
+    ["Almacén", "Polvo de hornear", "Polvo para Hornear Royal 100 g."],
+    ["Almacén", "Provenzal", "Provenzal El Mercado 50 g."],
+    ["Almacén", "Rapiditas", "Tortillas clásicas Rapiditas 10 uni"],
+    ["Almacén", "Rollo de cocina", "Rollo de cocina Sussex clásico 50 paños 3 uni"],
+    ["Almacén", "Sopas Knor", "Sopa de vegetales Knorr con caracolitos tricolor 107.5 g."],
+    ["Almacén", "Tapa de empanada", "Tapas para empanadas hojaldre rotiseras 12 u."],
+    ["Almacén", "Tapa de tarta", "Tapas para pascualinas Carrefour Classic hojaldre x 2 uni"],
+    ["Almacén", "Tomate puré", "Tomate triturado Don Francisco botella 950 g."],
+    ["Almacén", "Vinagre", "Vinagre de alcohol en bidón 5 lts."],
+    ["Bebidas", "Jugos Pura Fruta", "Jugo Pura Frutta tetra 1 l."],
+    ["Bebidas", "Jugos Zummy", "Puré de fruta Zummy pouch 90 g"],
+    ["Higiene", "Crema de enjuague Infantil", "Acondicionador Baby Dove humectación enriquecida 200 ml"],
+    ["Higiene", "Jabón infantil", "Jabón liquido corporal Dove Baby humectación sensible refill 180 ml"],
+    ["Higiene", "Papel higiénico", "Papel higiénico doble hoja Higienol plus x4 30 mts"],
+    ["Higiene", "Shampoo Infantil", "Shampoo humectación Baby Dove enriquecida 200 ml"],
+    ["Limpieza", "Ciff", "Limpiador cremoso Cif bio rosas y jazmin 375 grs"],
+    ["Limpieza", "Downy en precio", "Suavizante Downy Brisa Intenso, Rinde 2L, Perfume Intenso de Larga Duración 500 ml"],
+    ["Limpieza", "Limpiador de piso", "Limpiador líquido aromatizante Poett frescura de lavanda 1.8 lts."],
+    ["Limpieza", "Skip", "Jabón Líquido Skip Bio-Enzimas Doypack 3 lts"],
+    ["Lácteos", "Leche", "Leche descremada larga vida Las tres niñas 1 l."],
+    ["Lácteos", "Queso crema", "Queso crema descremado classic 480 g."],
+    ["Lácteos", "Yogurt Bastian", "Yogur Griego Sabor Natural Sin Endulzar YOGURISIMO 300g"],
+    ["Lácteos", "Yogurt La Serenísima", "Yogur firme entero sabor vainilla La Serenísima Nutrición Activa 190 grs"]
+];
+
+/* ============ MENÚ ============ */
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi().createMenu('🛒 Comparador')
+      .addItem('⚙️ Configurar planilla (primera vez)', 'configurarPlanilla')
+      .addItem('▶️ Comparar todo (por lotes)', 'compararTodo')
+      .addItem('⏭️ Procesar siguiente lote (manual)', 'procesarLote')
+      .addItem('🏷️ Actualizar Ofertas', 'actualizarOfertas')
+      .addItem('⏹️ Cancelar corrida en curso', 'cancelarCorrida')
+      .addToUi();
+  } catch (e) { /* sin UI (trigger o editor): no hacer nada */ }
 }
-[data-tema="claro"]{
-  --bg:#EFEDE6; --panel:#FFFFFF; --panel2:#F4F2EC; --linea:#DDD9CE;
-  --texto:#23262B; --texto2:#6B7280; --ticket:#FFFFFF; --ticket-tinta:#23262B;
-  --sombra:0 8px 24px rgba(35,38,43,.10);
+
+/* ============ CONFIGURACIÓN ============ */
+function configurarPlanilla() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Lista precargada
+  if (!ss.getSheetByName('Lista')) {
+    var sh = ss.insertSheet('Lista');
+    var filas = [['Categoría', 'Producto', 'Marca 1', 'Marca 2', 'Marca 3']];
+    SEED.forEach(function(s){ filas.push([s[0], s[1], s[2], '', '']); });
+    sh.getRange(1, 1, filas.length, 5).setValues(filas);
+    sh.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#efefef');
+    sh.setFrozenRows(1);
+    sh.autoResizeColumns(1, 5);
+  }
+  if (!ss.getSheetByName('MediosPago')) crearMediosPago();
+  if (!ss.getSheetByName('Comparación')) ss.insertSheet('Comparación');
+  if (!ss.getSheetByName('Histórico')) {
+    ss.insertSheet('Histórico').appendRow(
+      ['Fecha', 'Categoría', 'Producto', 'Super', 'Match', 'Precio final', 'Promo']);
+  }
+  ss.toast('Planilla configurada: revisá Lista y MediosPago, después ▶️ Comparar todo.', '🛒 Comparador', 10);
 }
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--texto);font-family:'IBM Plex Sans',sans-serif;font-size:15px;line-height:1.5;transition:background .25s}
-.mono{font-family:'IBM Plex Mono',monospace}
-.wrap{max-width:1180px;margin:0 auto;padding:22px 18px 60px}
 
-/* ===== header ===== */
-header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px}
-h1{font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:clamp(38px,6vw,58px);line-height:.95;letter-spacing:.5px;text-transform:uppercase}
-h1 .changuito{color:var(--oferta)}
-.sub{color:var(--texto2);font-size:13px;margin-top:6px}
-.sub .fecha{color:var(--texto);font-weight:600}
-.acciones{display:flex;gap:10px}
-.boton{background:var(--panel);border:1px solid var(--linea);color:var(--texto);border-radius:10px;padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
-.boton:hover{border-color:var(--texto2)}
-.boton:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--oferta);outline-offset:2px}
-
-/* ===== leyenda de supers ===== */
-.leyenda{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:18px;font-size:13px;color:var(--texto2)}
-.chip{display:inline-flex;align-items:center;gap:7px}
-.punto{width:11px;height:11px;border-radius:3px;display:inline-block}
-
-/* ===== fila superior: ticket + kpis ===== */
-.tope{display:grid;grid-template-columns:290px 1fr;gap:18px;margin-bottom:22px}
-@media(max-width:840px){.tope{grid-template-columns:1fr}}
-
-/* — EL TICKET (firma del dashboard) — */
-.ticket{background:var(--ticket);color:var(--ticket-tinta);border-radius:4px;padding:20px 18px 26px;box-shadow:var(--sombra);position:relative;font-family:'IBM Plex Mono',monospace}
-.ticket:before,.ticket:after{content:"";position:absolute;left:0;right:0;height:10px;background-image:radial-gradient(circle at 8px -3px, transparent 7px, var(--ticket) 8px);background-size:16px 10px}
-.ticket:before{top:-9px;transform:rotate(180deg)}
-.ticket:after{bottom:-9px}
-.ticket h2{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:20px;text-transform:uppercase;letter-spacing:1px;text-align:center;border-bottom:1.5px dashed #b9b4a6;padding-bottom:10px;margin-bottom:12px}
-.t-linea{display:flex;justify-content:space-between;font-size:13px;padding:3.5px 0}
-.t-linea span:first-child{color:#6d685c}
-.t-total{border-top:1.5px dashed #b9b4a6;margin-top:10px;padding-top:12px;display:flex;justify-content:space-between;align-items:baseline}
-.t-total .num{font-size:26px;font-weight:700}
-.t-pie{text-align:center;font-size:11px;color:#8d887a;margin-top:14px;letter-spacing:2px}
-
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;align-content:start}
-.kpi{background:var(--panel);border:1px solid var(--linea);border-radius:var(--radio);padding:16px}
-.kpi .v{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:34px;line-height:1}
-.kpi .l{color:var(--texto2);font-size:12.5px;margin-top:6px}
-.kpi .d{font-size:12px;margin-top:4px;font-weight:600}
-.pos{color:var(--ok)}.neg{color:var(--alerta)}
-
-/* ===== tabs ===== */
-.tabs{display:flex;gap:6px;border-bottom:1px solid var(--linea);margin-bottom:20px;overflow-x:auto}
-.tab{background:none;border:none;color:var(--texto2);font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:19px;text-transform:uppercase;letter-spacing:.8px;padding:10px 16px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap}
-.tab.activa{color:var(--texto);border-bottom-color:var(--oferta)}
-.pantalla{display:none}.pantalla.activa{display:block}
-
-/* ===== paneles y grillas ===== */
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-@media(max-width:840px){.grid2{grid-template-columns:1fr}}
-.panel{background:var(--panel);border:1px solid var(--linea);border-radius:var(--radio);padding:18px;margin-bottom:18px}
-.panel h3{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:20px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:12px}
-.panel .nota{color:var(--texto2);font-size:12px;margin-top:8px}
-.lienzo{position:relative;height:280px}
-
-/* ===== tablas ===== */
-.filtros{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-input[type=search],select{background:var(--panel2);border:1px solid var(--linea);color:var(--texto);border-radius:10px;padding:9px 12px;font-size:14px;font-family:inherit;min-width:150px}
-.tabla-scroll{overflow-x:auto}
-table{width:100%;border-collapse:collapse;font-size:13.5px}
-th{font-family:'Barlow Condensed',sans-serif;font-weight:700;font-size:14px;text-transform:uppercase;letter-spacing:.6px;color:var(--texto2);text-align:left;padding:9px 10px;border-bottom:1px solid var(--linea);white-space:nowrap}
-td{padding:9px 10px;border-bottom:1px solid var(--linea);vertical-align:top}
-td.num{font-family:'IBM Plex Mono',monospace;white-space:nowrap;text-align:right}
-tr:hover td{background:var(--panel2)}
-.gana{font-weight:700;position:relative}
-.gana:before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--c,var(--oferta))}
-.cat-fila td{font-family:'Barlow Condensed',sans-serif;font-weight:700;text-transform:uppercase;letter-spacing:.8px;font-size:15px;color:var(--texto2);background:var(--panel2)}
-.badge{display:inline-block;background:var(--oferta);color:#332a00;border-radius:4px;font-size:11px;font-weight:700;padding:2px 7px;margin-top:3px;transform:rotate(-1.2deg)}
-.badge.verificar{background:var(--alerta);color:#fff;transform:none}
-.badge.super{transform:none;color:#fff}
-.match{color:var(--texto2);font-size:12px;display:block;max-width:260px}
-
-/* ===== estado inicial ===== */
-.setup{background:var(--panel);border:1.5px dashed var(--linea);border-radius:var(--radio);padding:34px;text-align:center;max-width:640px;margin:60px auto}
-.setup h2{font-family:'Barlow Condensed',sans-serif;font-size:28px;text-transform:uppercase;margin-bottom:10px}
-.setup p{color:var(--texto2);font-size:14px;margin-bottom:8px}
-.setup code{background:var(--panel2);padding:2px 7px;border-radius:6px;font-size:12.5px}
-.cargando{text-align:center;color:var(--texto2);padding:70px 0;font-family:'IBM Plex Mono',monospace}
-@media (prefers-reduced-motion: no-preference){
-  .kpi,.panel,.ticket{animation:sube .4s ease both}
-  @keyframes sube{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+/* ============ TEXTO ============ */
+function norm(s) {
+  s = String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return s.replace(/[^a-z0-9\s]/g, ' ');
 }
-</style>
-</head>
-<body data-tema="oscuro">
-<div class="wrap">
-
-<header>
-  <div>
-    <h1>El <span class="changuito">Changuito</span></h1>
-    <div class="sub">Carrefour · Coto · Jumbo — datos de la corrida del <span class="fecha" id="fechaDatos">—</span></div>
-  </div>
-  <div class="acciones">
-    <button class="boton" id="btnTema" aria-label="Cambiar tema">☀️ / 🌙</button>
-    <button class="boton" id="btnRecargar">↻ Actualizar datos</button>
-  </div>
-</header>
-
-<div class="leyenda">
-  <span class="chip"><span class="punto" style="background:var(--carrefour)"></span>Carrefour</span>
-  <span class="chip"><span class="punto" style="background:var(--coto)"></span>Coto</span>
-  <span class="chip"><span class="punto" style="background:var(--jumbo)"></span>Jumbo</span>
-  <span class="chip"><span class="punto" style="background:var(--oferta)"></span>Promo activa</span>
-</div>
-
-<div id="app"><div class="cargando">Cargando datos del changuito…</div></div>
-
-</div>
-
-<script>
-/* =====================================================================
-   CONFIGURACIÓN — pegá acá los links CSV publicados de cada pestaña
-   (Archivo → Compartir → Publicar en la web → elegir pestaña → CSV)
-   ===================================================================== */
-var CSV_COMPARACION = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQOs428HZmBfqroCLXK4yT0tsuLa0-cYpzyrgcZJI-q6DGS0LqCmF-RJCfQI6w9AD3IKhHHnWCsapxs/pub?gid=1393065520&single=true&output=csv';
-var CSV_HISTORICO   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQOs428HZmBfqroCLXK4yT0tsuLa0-cYpzyrgcZJI-q6DGS0LqCmF-RJCfQI6w9AD3IKhHHnWCsapxs/pub?gid=1588693441&single=true&output=csv';   // opcional
-var CSV_OFERTAS     = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQOs428HZmBfqroCLXK4yT0tsuLa0-cYpzyrgcZJI-q6DGS0LqCmF-RJCfQI6w9AD3IKhHHnWCsapxs/pub?gid=2141995538&single=true&output=csv';     // opcional
-
-var SUPERS = ['Carrefour','Coto','Jumbo'];
-var COLORES = {}; // se llena según tema (canvas no lee variables CSS)
-var charts = {}, D = { comp:[], hist:[], ofertas:[] };
-
-function coloresTema(){
-  var claro = document.body.dataset.tema === 'claro';
-  COLORES = {
-    Carrefour:'#3B82F6', Coto:'#E5493C', Jumbo:'#2FA84F',
-    oferta:'#FFC53D', texto: claro ? '#23262B' : '#E8EAF0',
-    grilla: claro ? 'rgba(35,38,43,.09)' : 'rgba(232,234,240,.09)',
-    texto2: claro ? '#6B7280' : '#9AA3B5'
-  };
+function tokens(s) {
+  var out = {};
+  norm(s).split(/\s+/).forEach(function(t){ if (t && STOPWORDS.indexOf(t) < 0) out[t] = true; });
+  return Object.keys(out);
 }
-function precio(v){
-  if (v === null || v === undefined || v === '') return null;
-  if (typeof v === 'number') return v;
-  var n = parseFloat(String(v).replace(/[$\s]/g,'').replace(/,/g,''));
-  return isNaN(n) ? null : n;
+function score(objToks, nombre) {
+  if (!objToks.length) return 0;
+  var nt = {}; tokens(nombre).forEach(function(t){ nt[t] = true; });
+  var inter = 0, numsHit = 0;
+  objToks.forEach(function(t){ if (nt[t]) { inter++; if (/^\d+$/.test(t)) numsHit++; } });
+  return inter / objToks.length + 0.15 * numsHit;
 }
-function fmt(n){ return n === null ? '—' : '$' + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
-function fmtK(n){ return '$' + Math.round(n).toLocaleString('en-US'); }
+function terminosFallback(detalle, producto) {
+  var t1 = String(detalle).replace(/\s+/g, ' ').trim();
+  var toks = norm(t1).split(/\s+/).filter(function(w){ return w && MARCAS_PROPIAS.indexOf(w) < 0; });
+  var t2 = toks.join(' ');
+  var sig = toks.filter(function(w){ return STOPWORDS.indexOf(w) < 0; });
+  var nums = sig.filter(function(w){ return /^\d+$/.test(w); });
+  var t3 = sig.slice(0, 4).concat(nums.slice(0, 1)).join(' ');
+  var t4 = norm(producto).trim();
+  var vistos = {}, orden = [];
+  [t1, t2, t3, t4].forEach(function(t){ if (t && !vistos[t]) { vistos[t] = 1; orden.push(t); } });
+  return orden;
+}
 
-function cargarCSV(url){
-  return new Promise(function(res){
-    if (!url || url.indexOf('http') !== 0) return res([]);
-    Papa.parse(url + (url.indexOf('?')>=0?'&':'?') + 'nocache=' + Date.now(), {
-      download:true, header:true, skipEmptyLines:true,
-      complete:function(r){ res(r.data || []); }, error:function(){ res([]); }
-    });
+/* ============ HTTP con reintentos ============ */
+function fetchJson(url) {
+  for (var i = 0; i < 3; i++) {
+    try {
+      var r = UrlFetchApp.fetch(url, { muteHttpExceptions: true,
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' } });
+      if (r.getResponseCode() === 200) return JSON.parse(r.getContentText());
+    } catch (e) {}
+    Utilities.sleep(800 + i * 700);
+  }
+  return null;
+}
+
+/* ============ BUSCADORES ============ */
+function buscarVtex(dominio, termino) {
+  var data = fetchJson('https://' + dominio + '/api/catalog_system/pub/products/search/?ft=' +
+                       encodeURIComponent(termino) + '&_from=0&_to=' + (N_CANDIDATOS - 1));
+  var out = [];
+  if (!data || !data.length) return out;
+  data.forEach(function(p) {
+    try {
+      var offer = p.items[0].sellers[0].commertialOffer;
+      var precio = offer.Price, lista = offer.ListPrice || precio;
+      if (!precio) return;
+      if (offer.IsAvailable === false || offer.AvailableQuantity < 1) return;
+      if (lista > precio * 3) lista = precio;
+      var teasers = [];
+      (offer.Teasers || []).concat(offer.PromotionTeasers || []).forEach(function(t) {
+        var n = t.Name || t['<Name>k__BackingField']; if (n) teasers.push(n);
+      });
+      var promo = teasers.join('; ');
+      if (precio < lista && !promo) promo = Math.round((1 - precio / lista) * 100) + '% dto directo';
+      out.push({ nombre: p.productName || '', marca: String(p.brand || ''),
+                 lista: lista, fin: precio, promo: promo });
+    } catch (e) {}
   });
+  return out;
 }
-
-function iniciar(){
-  coloresTema();
-  if (CSV_COMPARACION.indexOf('http') !== 0){
-    document.getElementById('app').innerHTML =
-      '<div class="setup"><h2>Falta conectar tu planilla</h2>' +
-      '<p>Abrí este archivo y pegá los links CSV publicados en las constantes de arriba:</p>' +
-      '<p><code>CSV_COMPARACION</code> (obligatorio) · <code>CSV_HISTORICO</code> y <code>CSV_OFERTAS</code> (opcionales)</p>' +
-      '<p>En tu Google Sheet: Archivo → Compartir → Publicar en la web → elegís la pestaña → formato CSV.</p></div>';
-    return;
-  }
-  Promise.all([cargarCSV(CSV_COMPARACION), cargarCSV(CSV_HISTORICO), cargarCSV(CSV_OFERTAS)])
-    .then(function(r){
-      D.comp = r[0].filter(function(f){ return f['Producto'] && String(f['Categoría']||'').indexOf('SUBTOTAL') !== 0; });
-      D.hist = r[1].filter(function(f){ return f['Producto']; });
-      D.ofertas = r[2].filter(function(f){ return f['Producto']; });
-      render();
-    });
-}
-
-/* ============================ RENDER ============================ */
-function render(){
-  var app = document.getElementById('app');
-  if (!D.comp.length){
-    app.innerHTML = '<div class="setup"><h2>Sin datos todavía</h2><p>Corré el comparador en tu planilla (menú 🛒 → ▶️ Comparar todo) y volvé a actualizar.</p></div>';
-    return;
-  }
-  var m = metricas();
-  document.getElementById('fechaDatos').textContent = m.fecha || 'última corrida';
-
-  app.innerHTML =
-    '<div class="tope">' + htmlTicket(m) + htmlKpis(m) + '</div>' +
-    '<div class="tabs" role="tablist">' +
-      ['Resumen','Comparación','Histórico','Ofertas'].map(function(t,i){
-        return '<button class="tab'+(i===0?' activa':'')+'" data-tab="'+t+'" role="tab">'+t+'</button>';
-      }).join('') +
-    '</div>' +
-    '<div class="pantalla activa" id="tab-Resumen">' +
-      '<div class="grid2"><div class="panel"><h3>Si comprás todo en un solo super</h3><div class="lienzo"><canvas id="chSolo"></canvas></div><p class="nota" id="notaSolo"></p></div>' +
-      '<div class="panel"><h3>Quién gana cada producto</h3><div class="lienzo"><canvas id="chGana"></canvas></div></div></div>' +
-      '<div class="panel"><h3>Gasto óptimo por categoría</h3><div class="lienzo"><canvas id="chCat"></canvas></div></div>' +
-    '</div>' +
-    '<div class="pantalla" id="tab-Comparación">' +
-      '<div class="filtros"><input type="search" id="fBusca" placeholder="Buscar producto…">' +
-      '<select id="fCat"><option value="">Todas las categorías</option></select></div>' +
-      '<div class="tabla-scroll"><table id="tComp"></table></div>' +
-    '</div>' +
-    '<div class="pantalla" id="tab-Histórico">' + (D.hist.length ?
-      '<div class="grid2"><div class="panel"><h3>Evolución del producto</h3>' +
-      '<div class="filtros"><select id="fProd"></select></div><div class="lienzo"><canvas id="chProd"></canvas></div></div>' +
-      '<div class="panel"><h3>Índice changuito (mejor precio)</h3><div class="lienzo"><canvas id="chIndice"></canvas></div>' +
-      '<p class="nota">Suma del mejor precio por producto en cada corrida (solo productos presentes en todas las corridas).</p></div></div>' +
-      '<div class="panel"><h3>Mayores movimientos desde la primera corrida</h3><div class="tabla-scroll"><table id="tMov"></table></div></div>'
-      : '<div class="setup"><h2>Histórico vacío</h2><p>Se llena solo con cada corrida mensual del comparador. Con 2+ corridas vas a ver la evolución acá.</p></div>') +
-    '</div>' +
-    '<div class="pantalla" id="tab-Ofertas">' + (D.ofertas.length ?
-      '<div class="filtros"><select id="fSuperOf"><option value="">Los 3 supers</option>' +
-      SUPERS.map(function(s){return '<option>'+s+'</option>';}).join('') + '</select>' +
-      '<select id="fLista"><option value="">Todas las ofertas</option><option value="si">Solo productos de mi lista</option></select></div>' +
-      '<div class="tabla-scroll"><table id="tOfertas"></table></div>'
-      : '<div class="setup"><h2>Sin ofertas cargadas</h2><p>En tu planilla: menú 🛒 → 🏷️ Actualizar Ofertas, publicá la pestaña como CSV y pegá el link en <code>CSV_OFERTAS</code>.</p></div>') +
-    '</div>';
-
-  eventos(); graficos(m); tablaComparacion(); tablaOfertas(); historico();
-}
-
-/* ============================ MÉTRICAS ============================ */
-function metricas(){
-  var m = { fecha:'', totalOptimo:0, promos:0, productos:D.comp.length,
-            gana:{Carrefour:0,Coto:0,Jumbo:0}, porCat:{}, soloSuper:{}, interseccion:0 };
-  var completos = [];
-  D.comp.forEach(function(f){
-    var fin = precio(f['PRECIO FINAL C/PAGO']) !== null ? precio(f['PRECIO FINAL C/PAGO']) : precio(f['MEJOR PRECIO']);
-    if (fin !== null){
-      m.totalOptimo += fin;
-      var cat = f['Categoría'] || 'Sin categoría';
-      m.porCat[cat] = (m.porCat[cat] || 0) + fin;
+function buscarCoto(termino) {
+  var data = fetchJson('https://ac.cnstrc.com/search/' + encodeURIComponent(termino) +
+                       '?key=' + COTO_KEY + '&i=sheet-comparador&s=1&num_results_per_page=' + N_CANDIDATOS);
+  var out = [];
+  if (!data || !data.response) return out;
+  (data.response.results || []).forEach(function(r) {
+    var d = r.data || {}, precios = d.price || [];
+    if (!precios.length) return;
+    var lista = d.product_list_price || precios[0].listPrice;
+    var fin = precios[0].listPrice || lista, promo = '';
+    var descs = d.discounts || [];
+    if (descs.length) {
+      var dd = descs[0];
+      promo = [(dd.discountText || ''), (dd.takingText || '')].join(' ').trim();
+      var m = String(dd.discountPrice || '').replace(',', '.').match(/[\d.]+/);
+      if (m) fin = Math.min(fin, parseFloat(m[0]));
+      if (dd.comments) promo += ' (' + dd.comments + ')';
+    } else if ((d.discounts_payment_methods || []).length) {
+      promo = 'Promo con tarjetas (ver web)';
     }
-    if (f['MEJOR SUPER'] && m.gana[f['MEJOR SUPER']] !== undefined) m.gana[f['MEJOR SUPER']]++;
-    var conPromo = SUPERS.some(function(s){
-      var p = f[s + ' promo'] || '';
-      return p && !/^Tarjeta Carrefour/i.test(p);
+    out.push({ nombre: String(r.value || '').replace(/&#\d+;/g, ''),
+               marca: String(d.product_brand || ''),
+               lista: lista, fin: Math.round(fin * 100) / 100, promo: promo });
+  });
+  return out;
+}
+function buscar(superM, termino) {
+  if (superM === 'Carrefour') return buscarVtex('www.carrefour.com.ar', termino);
+  if (superM === 'Jumbo')     return buscarVtex('www.jumbo.com.ar', termino);
+  return buscarCoto(termino);
+}
+function mejorMatchMultiMarca(superM, marcas, producto) {
+  // Por cada marca: su mejor match, exigiendo similitud minima (0.45).
+  // Entre todas las marcas VALIDAS de ese super, gana el precio MAS BAJO.
+  var validos = [];
+  marcas.forEach(function(marca) {
+    var objToks = tokens(marca);
+    var terminos = terminosFallback(marca, producto), setLocal = [];
+    for (var i = 0; i < terminos.length; i++) {
+      var cs = buscar(superM, terminos[i]);
+      cs.forEach(function(c){ c.score = score(objToks, c.nombre + ' ' + c.marca); });
+      cs.sort(function(a, b){ return b.score - a.score; });
+      cs = cs.filter(function(c){ return c.score >= 0.3; });
+      if (cs.length && (!setLocal.length || cs[0].score > setLocal[0].score)) setLocal = cs;
+      if (setLocal.length && setLocal[0].score >= 0.66) break;
+      Utilities.sleep(150);
+    }
+    if (setLocal.length && setLocal[0].score >= 0.45) {   // piso de calidad del match
+      var c = setLocal[0];
+      c.alternativas = setLocal.slice(1);
+      c.marcaBuscada = marca;
+      validos.push(c);
+    }
+  });
+  if (!validos.length) return null;
+  validos.sort(function(a, b){ return a.fin - b.fin; });   // el mas barato de los validos
+  var ganador = validos[0];
+  // las otras marcas validas quedan como alternativas para la validacion cruzada
+  ganador.alternativas = validos.slice(1).concat(ganador.alternativas || []);
+  return ganador;
+}
+
+/* ============ MEDIOS DE PAGO ============ */
+function crearMediosPago() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (ss.getSheetByName('MediosPago')) return;
+  var sh = ss.insertSheet('MediosPago');
+  var filas = [
+    ['Medio', 'Super', '% Dto', 'Tope $', 'Apila con promo producto', 'Condición / Notas'],
+    ['MODO Santander (Visa déb/créd/prepaga)', 'Carrefour', 0, 0, 'NO', 'CONFIRMAR día y tope mensual en app'],
+    ['MODO Galicia (Visa/Master)',             'Coto',      0, 0, 'NO', 'CONFIRMAR'],
+    ['MODO Galicia (Visa/Master)',             'Carrefour', 0, 0, 'NO', 'CONFIRMAR'],
+    ['Cencopay Mastercard',                    'Jumbo',     0, 0, 'NO', 'Tarjeta Cencosud: beneficios Jumbo/Disco/Vea'],
+    ['Mercado Pago (dinero en cuenta)',        'Coto',      0, 0, 'NO', 'Muchas promos MP exigen dinero en cuenta (NO prepaga)'],
+    ['Crédito Mercado Pago',                   'Coto',      0, 0, 'NO', 'Cuotas sin interés con mínimo de compra'],
+    ['Prepaga Master (MODO/MP)',               'Carrefour', 0, 0, 'NO', 'Vale cuando la promo dice recargable/prepaga'],
+    ['Visa Crédito Santander (directa)',       'Coto',      0, 0, 'NO', 'Coto Digital suele tener días Santander online'],
+    ['Tarjeta Carrefour (si la sacás)',        'Carrefour', 15, 0, 'SI', 'Martes 15% s/tope aparece en teasers de la web']
+  ];
+  sh.getRange(1, 1, filas.length, 6).setValues(filas);
+  sh.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#efefef');
+}
+function leerMediosPago(ss) {
+  var sh = ss.getSheetByName('MediosPago');
+  if (!sh) return [];
+  return sh.getDataRange().getValues().slice(1)
+    .filter(function(f){ return f[0] && f[2] > 0; })
+    .map(function(f){ return { medio: f[0], superM: f[1], dto: Number(f[2]) / 100,
+                               tope: Number(f[3]) || 0, apila: String(f[4]).toUpperCase() === 'SI' }; });
+}
+function precioConPago(superM, lista, fin, promoTxt, medios) {
+  var mejor = { precio: fin, medio: promoTxt ? 'Promo producto' : 'Precio de góndola' };
+  var noAcum = /no acumulable/i.test(promoTxt || '');
+  medios.filter(function(m){ return m.superM === superM; }).forEach(function(m) {
+    var base = (promoTxt && !noAcum) ? fin : lista;
+    var dto = Math.min(base * m.dto, m.tope > 0 ? m.tope : Infinity);
+    var cand = base - dto;
+    if (promoTxt && noAcum) cand = Math.min(cand, fin);
+    if (cand < mejor.precio) mejor = { precio: Math.round(cand * 100) / 100, medio: m.medio };
+  });
+  return mejor;
+}
+
+/* ============ LECTURA DE LISTA ============ */
+function leerLista(ss) {
+  var lista = ss.getSheetByName('Lista');
+  if (!lista) return null;
+  var datos = lista.getDataRange().getValues();
+  var head = datos[0].map(function(h){ return norm(h).trim(); });
+  function col(nombres) {
+    for (var i = 0; i < nombres.length; i++) {
+      var idx = head.indexOf(norm(nombres[i]).trim());
+      if (idx >= 0) return idx;
+    }
+    return -1;
+  }
+  var cProd = col(['Producto']), cCat = col(['Categoría', 'Categoria']);
+  var cM1 = col(['Marca 1', 'Marca']), cM2 = col(['Marca 2']), cM3 = col(['Marca 3']);
+  if (cProd < 0 || cM1 < 0) return null;
+  var items = [];
+  for (var i = 1; i < datos.length; i++) {
+    var prod = String(datos[i][cProd] || '').trim();
+    var marcas = [cM1, cM2, cM3].filter(function(c){ return c >= 0; })
+      .map(function(c){ return String(datos[i][c] || '').trim(); }).filter(String);
+    if (!prod || !marcas.length) continue;
+    items.push({ prod: prod, marcas: marcas,
+                 cat: cCat >= 0 ? (String(datos[i][cCat] || '').trim() || 'Sin categoría') : 'Sin categoría' });
+  }
+  items.sort(function(a, b){ return a.cat.localeCompare(b.cat) || a.prod.localeCompare(b.prod); });
+  return items;
+}
+
+/* ============ CORRIDA POR LOTES ============ */
+function encabezado() {
+  var h = ['Categoría', 'Producto'];
+  SUPERS.forEach(function(s){ h = h.concat([s + ' match', s + ' lista', s + ' final', s + ' promo']); });
+  return h.concat(['MEJOR SUPER', 'MEJOR PRECIO', 'MEJOR PAGANDO CON', 'PRECIO FINAL C/PAGO']);
+}
+
+function compararTodo() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss.getSheetByName('Lista')) { configurarPlanilla(); }
+  cancelarCorrida(true);
+  var props = PropertiesService.getDocumentProperties();
+  props.setProperty('lote_idx', '0');
+  props.setProperty('run_date', Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd'));
+  var sh = ss.getSheetByName('Comparación') || ss.insertSheet('Comparación');
+  sh.clear();
+  var h = encabezado();
+  sh.getRange(1, 1, 1, h.length).setValues([h]).setFontWeight('bold').setBackground('#efefef');
+  sh.setFrozenRows(1);
+  procesarLote();
+}
+
+function procesarLote() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var props = PropertiesService.getDocumentProperties();
+  var idx = Number(props.getProperty('lote_idx') || 0);
+  var hoy = props.getProperty('run_date') ||
+            Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+  var items = leerLista(ss);
+  if (!items) { ss.toast('No encuentro la pestaña "Lista" (corré Configurar planilla).'); return; }
+  var medios = leerMediosPago(ss);
+  var sh = ss.getSheetByName('Comparación');
+  var lote = items.slice(idx, idx + LOTE);
+  var filas = [], historico = [];
+
+  lote.forEach(function(it) {
+    var fila = [it.cat, it.prod], elegidos = {}, provisorio = {};
+    SUPERS.forEach(function(s) {
+      var b = mejorMatchMultiMarca(s, it.marcas, it.prod);
+      if (b) { elegidos[s] = b; provisorio[s] = b.fin; }
     });
-    if (conPromo) m.promos++;
-    var precios = {};
-    SUPERS.forEach(function(s){ var v = precio(f[s + ' final']); if (v !== null) precios[s] = v; });
-    if (Object.keys(precios).length === 3) completos.push(precios);
-  });
-  m.interseccion = completos.length;
-  SUPERS.forEach(function(s){
-    m.soloSuper[s] = completos.reduce(function(a,p){ return a + p[s]; }, 0);
-  });
-  m.mixOptimo = completos.reduce(function(a,p){ return a + Math.min(p.Carrefour, p.Coto, p.Jumbo); }, 0);
-  var peorSolo = Math.max.apply(null, SUPERS.map(function(s){ return m.soloSuper[s]; }));
-  var mejorSolo = Math.min.apply(null, SUPERS.map(function(s){ return m.soloSuper[s]; }));
-  m.ahorroMezcla = mejorSolo - m.mixOptimo;
-  m.ahorroVsPeor = peorSolo - m.mixOptimo;
-  if (D.hist.length) m.fecha = D.hist[D.hist.length - 1]['Fecha'] || '';
-  return m;
-}
-
-function htmlTicket(m){
-  var lineas = SUPERS.map(function(s){
-    return '<div class="t-linea"><span>Todo en ' + s + ' (' + m.interseccion + ' prod.)</span><span>' + fmtK(m.soloSuper[s]) + '</span></div>';
-  }).join('');
-  return '<div class="ticket"><h2>Ticket del mes</h2>' + lineas +
-    '<div class="t-linea"><span>Mezclando supers</span><span>' + fmtK(m.mixOptimo) + '</span></div>' +
-    '<div class="t-total"><span>TOTAL ÓPTIMO</span><span class="num">' + fmtK(m.totalOptimo) + '</span></div>' +
-    '<div class="t-pie">* * * GRACIAS POR SU COMPRA * * *</div></div>';
-}
-function htmlKpis(m){
-  return '<div class="kpis">' +
-    '<div class="kpi"><div class="v">' + m.productos + '</div><div class="l">productos comparados</div></div>' +
-    '<div class="kpi"><div class="v">' + m.promos + '</div><div class="l">con promo activa</div></div>' +
-    '<div class="kpi"><div class="v">' + fmtK(m.ahorroMezcla) + '</div><div class="l">ahorro por mezclar vs el mejor super único</div><div class="d pos">sobre ' + m.interseccion + ' productos comparables</div></div>' +
-    '<div class="kpi"><div class="v">' + fmtK(m.ahorroVsPeor) + '</div><div class="l">ahorro vs comprar todo en el más caro</div></div>' +
-  '</div>';
-}
-
-/* ============================ GRÁFICOS ============================ */
-function destruir(id){ if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
-function graficos(m){
-  destruir('chSolo');
-  charts.chSolo = new Chart(document.getElementById('chSolo'), {
-    type:'bar',
-    data:{ labels: SUPERS.concat(['Mezcla óptima']),
-      datasets:[{ data: SUPERS.map(function(s){return m.soloSuper[s];}).concat([m.mixOptimo]),
-        backgroundColor: SUPERS.map(function(s){return COLORES[s];}).concat([COLORES.oferta]), borderRadius:6 }]},
-    options: opts({ indexAxis:'y' })
-  });
-  document.getElementById('notaSolo').textContent =
-    'Comparación justa: solo los ' + m.interseccion + ' productos con precio en los 3 supers.';
-  destruir('chGana');
-  charts.chGana = new Chart(document.getElementById('chGana'), {
-    type:'doughnut',
-    data:{ labels:SUPERS, datasets:[{ data:SUPERS.map(function(s){return m.gana[s];}),
-      backgroundColor:SUPERS.map(function(s){return COLORES[s];}), borderWidth:0 }]},
-    options:{ plugins:{ legend:{ position:'bottom', labels:{ color:COLORES.texto } } }, cutout:'62%' }
-  });
-  var cats = Object.keys(m.porCat).sort(function(a,b){ return m.porCat[b]-m.porCat[a]; });
-  destruir('chCat');
-  charts.chCat = new Chart(document.getElementById('chCat'), {
-    type:'bar',
-    data:{ labels:cats, datasets:[{ data:cats.map(function(c){return m.porCat[c];}),
-      backgroundColor:COLORES.oferta, borderRadius:6 }]},
-    options: opts({})
-  });
-}
-function opts(extra){
-  var o = { responsive:true, maintainAspectRatio:false,
-    plugins:{ legend:{ display:false },
-      tooltip:{ callbacks:{ label:function(c){ return ' ' + fmtK(c.parsed.y !== undefined && c.parsed.y !== null ? (extra.indexAxis==='y'?c.parsed.x:c.parsed.y) : c.parsed); } } } },
-    scales:{ x:{ ticks:{ color:COLORES.texto2 }, grid:{ color:COLORES.grilla } },
-             y:{ ticks:{ color:COLORES.texto2 }, grid:{ color:COLORES.grilla } } } };
-  for (var k in extra) o[k] = extra[k];
-  return o;
-}
-
-/* ============================ COMPARACIÓN ============================ */
-function tablaComparacion(){
-  var sel = document.getElementById('fCat');
-  var cats = {};
-  D.comp.forEach(function(f){ cats[f['Categoría'] || 'Sin categoría'] = 1; });
-  Object.keys(cats).sort().forEach(function(c){
-    var o = document.createElement('option'); o.textContent = c; sel.appendChild(o);
-  });
-  pintarComparacion();
-}
-function pintarComparacion(){
-  var q = (document.getElementById('fBusca').value || '').toLowerCase();
-  var cat = document.getElementById('fCat').value;
-  var html = '<tr><th>Producto</th>' + SUPERS.map(function(s){return '<th style="text-align:right">'+s+'</th>';}).join('') +
-             '<th>Mejor pagando con</th><th style="text-align:right">Final</th></tr>';
-  var catAct = null;
-  D.comp.forEach(function(f){
-    var c = f['Categoría'] || 'Sin categoría';
-    if (cat && c !== cat) return;
-    if (q && f['Producto'].toLowerCase().indexOf(q) < 0) return;
-    if (c !== catAct && !q){ html += '<tr class="cat-fila"><td colspan="6">' + c + '</td></tr>'; catAct = c; }
-    var precios = {};
-    SUPERS.forEach(function(s){ precios[s] = precio(f[s + ' final']); });
-    var min = Math.min.apply(null, SUPERS.map(function(s){ return precios[s] === null ? Infinity : precios[s]; }));
-    html += '<tr><td><strong>' + f['Producto'] + '</strong></td>';
-    SUPERS.forEach(function(s){
-      var p = precios[s], promo = f[s + ' promo'] || '';
-      var celda = p === null ? '<span style="color:var(--texto2)">—</span>' : fmt(p);
-      var badges = '';
-      if (/VERIFICAR/i.test(promo)) badges += '<span class="badge verificar">verificar</span> ';
-      else if (promo && !/^Tarjeta Carrefour/i.test(promo)) badges += '<span class="badge">' + promo.split('(')[0].trim().slice(0,26) + '</span>';
-      var clase = (p !== null && p === min) ? ' class="num gana" style="--c:var(--' + s.toLowerCase() + ')"' : ' class="num"';
-      html += '<td' + clase + '>' + celda + (badges ? '<br>' + badges : '') + '</td>';
+    SUPERS.forEach(function(s) {
+      var b = elegidos[s];
+      if (!b) { fila = fila.concat(['', '', '', '']); return; }
+      var otros = SUPERS.filter(function(o){ return o !== s && provisorio[o]; })
+                        .map(function(o){ return provisorio[o]; }).sort(function(a, c){ return a - c; });
+      if (otros.length) {
+        var med = otros[Math.floor(otros.length / 2)];
+        if (b.fin < med * 0.25 || b.fin > med * 4) {
+          var alt = (b.alternativas || []).slice(1)
+            .filter(function(c){ return c.fin >= med * 0.25 && c.fin <= med * 4; })[0];
+          if (alt) { alt.alternativas = b.alternativas; b = alt; elegidos[s] = alt; }
+          else b.promo = (b.promo ? b.promo + ' ' : '') + '[VERIFICAR precio]';
+        }
+      }
+      fila = fila.concat([b.nombre, b.lista, b.fin, b.promo]);
+      historico.push([hoy, it.cat, it.prod, s, b.nombre, b.fin, b.promo]);
     });
-    html += '<td style="font-size:12.5px">' + (f['MEJOR PAGANDO CON'] || '—') + '</td>' +
-            '<td class="num"><strong>' + fmt(precio(f['PRECIO FINAL C/PAGO']) !== null ? precio(f['PRECIO FINAL C/PAGO']) : precio(f['MEJOR PRECIO'])) + '</strong></td></tr>';
-  });
-  document.getElementById('tComp').innerHTML = html;
-}
-
-/* ============================ HISTÓRICO ============================ */
-function historico(){
-  if (!D.hist.length) return;
-  var porProd = {}, fechas = {};
-  D.hist.forEach(function(f){
-    fechas[f['Fecha']] = 1;
-    var k = f['Producto'];
-    porProd[k] = porProd[k] || {};
-    porProd[k][f['Fecha']] = porProd[k][f['Fecha']] || {};
-    porProd[k][f['Fecha']][f['Super']] = precio(f['Precio final']);
-  });
-  var listaFechas = Object.keys(fechas).sort();
-  var sel = document.getElementById('fProd');
-  Object.keys(porProd).sort().forEach(function(p){
-    var o = document.createElement('option'); o.textContent = p; sel.appendChild(o);
-  });
-  sel.onchange = function(){ lineaProducto(porProd, listaFechas, sel.value); };
-  lineaProducto(porProd, listaFechas, sel.value);
-
-  // índice changuito: mejor precio por producto en cada fecha
-  var completos = Object.keys(porProd).filter(function(p){
-    return listaFechas.every(function(f){ return porProd[p][f]; });
-  });
-  var indice = listaFechas.map(function(f){
-    return completos.reduce(function(a,p){
-      var vals = SUPERS.map(function(s){ return porProd[p][f][s]; }).filter(function(v){ return v !== null && v !== undefined; });
-      return a + (vals.length ? Math.min.apply(null, vals) : 0);
-    }, 0);
-  });
-  destruir('chIndice');
-  charts.chIndice = new Chart(document.getElementById('chIndice'), {
-    type:'line',
-    data:{ labels:listaFechas, datasets:[{ data:indice, borderColor:COLORES.oferta,
-      backgroundColor:'transparent', tension:.25, pointRadius:4 }]},
-    options: opts({})
-  });
-
-  // movimientos primera vs última corrida
-  if (listaFechas.length > 1){
-    var f0 = listaFechas[0], f1 = listaFechas[listaFechas.length - 1], movs = [];
-    completos.forEach(function(p){
-      function minDe(f){ var v = SUPERS.map(function(s){return porProd[p][f][s];}).filter(function(x){return x!==null&&x!==undefined;}); return v.length?Math.min.apply(null,v):null; }
-      var a = minDe(f0), b = minDe(f1);
-      if (a && b) movs.push({ p:p, var:(b-a)/a*100, de:a, a:b });
+    var mejorS = '', mejorP = Infinity, mejorPago = { precio: Infinity, medio: '' };
+    SUPERS.forEach(function(s) {
+      var b = elegidos[s]; if (!b) return;
+      var pago = precioConPago(s, b.lista, b.fin, b.promo, medios);
+      if (pago.precio < mejorPago.precio) mejorPago = { precio: pago.precio, medio: s + ' -> ' + pago.medio };
+      if (b.fin < mejorP) { mejorP = b.fin; mejorS = s; }
     });
-    movs.sort(function(x,y){ return Math.abs(y.var) - Math.abs(x.var); });
-    var html = '<tr><th>Producto</th><th style="text-align:right">' + f0 + '</th><th style="text-align:right">' + f1 + '</th><th style="text-align:right">Variación</th></tr>';
-    movs.slice(0,10).forEach(function(x){
-      html += '<tr><td>' + x.p + '</td><td class="num">' + fmt(x.de) + '</td><td class="num">' + fmt(x.a) + '</td>' +
-        '<td class="num ' + (x.var >= 0 ? 'neg' : 'pos') + '">' + (x.var >= 0 ? '+' : '') + x.var.toFixed(1) + '%</td></tr>';
-    });
-    document.getElementById('tMov').innerHTML = html;
+    fila = fila.concat([mejorS, mejorP === Infinity ? '' : mejorP,
+                        mejorPago.medio, mejorPago.precio === Infinity ? '' : mejorPago.precio]);
+    filas.push(fila);
+  });
+
+  if (filas.length) {
+    sh.getRange(sh.getLastRow() + 1, 1, filas.length, filas[0].length).setValues(filas);
+    var hi = ss.getSheetByName('Histórico') || ss.insertSheet('Histórico');
+    if (hi.getLastRow() === 0)
+      hi.appendRow(['Fecha', 'Categoría', 'Producto', 'Super', 'Match', 'Precio final', 'Promo']);
+    hi.getRange(hi.getLastRow() + 1, 1, historico.length, 7).setValues(historico);
+  }
+
+  idx += LOTE;
+  if (idx < items.length) {
+    props.setProperty('lote_idx', String(idx));
+    ScriptApp.newTrigger('procesarLote').timeBased().after(30 * 1000).create(); // sigue solo en 30 seg
+    ss.toast('Lote listo: ' + Math.min(idx, items.length) + '/' + items.length +
+             ' productos. Sigue solo en 30 seg...', '🛒 Comparador', 5);
   } else {
-    document.getElementById('tMov').innerHTML = '<tr><td style="color:var(--texto2)">Con la próxima corrida mensual aparecen las variaciones acá.</td></tr>';
+    finalizarCorrida();
   }
 }
-function lineaProducto(porProd, fechas, prod){
-  destruir('chProd');
-  charts.chProd = new Chart(document.getElementById('chProd'), {
-    type:'line',
-    data:{ labels:fechas, datasets: SUPERS.map(function(s){
-      return { label:s, data:fechas.map(function(f){ return (porProd[prod][f]||{})[s] !== undefined ? porProd[prod][f][s] : null; }),
-        borderColor:COLORES[s], backgroundColor:'transparent', tension:.25, pointRadius:4, spanGaps:true };
-    })},
-    options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ labels:{ color:COLORES.texto } } },
-      scales:{ x:{ ticks:{ color:COLORES.texto2 }, grid:{ color:COLORES.grilla } },
-               y:{ ticks:{ color:COLORES.texto2 }, grid:{ color:COLORES.grilla } } } }
+
+function finalizarCorrida() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  cancelarCorrida(true);
+  var sh = ss.getSheetByName('Comparación');
+  var datos = sh.getDataRange().getValues();
+  var h = datos[0], filas = datos.slice(1).filter(function(f){ return f[1]; });
+  var iFinal = h.length - 1;   // PRECIO FINAL C/PAGO
+  var iMejor = h.length - 3;   // MEJOR PRECIO
+  var out = [h], catActual = null, subtotal = 0;
+  function filaSub() {
+    if (catActual === null) return;
+    var f = new Array(h.length).fill('');
+    f[0] = 'SUBTOTAL ' + String(catActual).toUpperCase();
+    f[iMejor] = subtotal;
+    out.push(f);
+  }
+  filas.forEach(function(f) {
+    if (f[0] !== catActual) { filaSub(); catActual = f[0]; subtotal = 0; }
+    var v = Number(f[iFinal]) || Number(f[iMejor]) || 0;
+    subtotal += v;
+    out.push(f);
   });
+  filaSub();
+  sh.clear();
+  sh.getRange(1, 1, out.length, h.length).setValues(out);
+  sh.getRange(1, 1, 1, h.length).setFontWeight('bold').setBackground('#efefef');
+  sh.setFrozenRows(1);
+  for (var r = 2; r <= out.length; r++) {
+    if (String(out[r - 1][0]).indexOf('SUBTOTAL') === 0)
+      sh.getRange(r, 1, 1, h.length).setFontWeight('bold').setBackground('#fff2cc');
+  }
+  h.forEach(function(t, i) {
+    if (/lista|final|PRECIO/i.test(t) && !/match|promo|SUPER|CON/i.test(t))
+      sh.getRange(2, i + 1, out.length - 1, 1).setNumberFormat(FORMATO_PRECIO);
+  });
+  sh.autoResizeColumns(1, h.length);
+  var hi = ss.getSheetByName('Histórico');
+  if (hi && hi.getLastRow() > 1)
+    hi.getRange(2, 6, hi.getLastRow() - 1, 1).setNumberFormat(FORMATO_PRECIO);
+  ss.toast('Corrida completa: ' + filas.length + ' productos comparados.', '🛒 Comparador', 8);
 }
 
-/* ============================ OFERTAS ============================ */
-function tablaOfertas(){
-  if (!D.ofertas.length) return;
-  document.getElementById('fSuperOf').onchange = pintarOfertas;
-  document.getElementById('fLista').onchange = pintarOfertas;
-  pintarOfertas();
-}
-function pintarOfertas(){
-  var s = document.getElementById('fSuperOf').value;
-  var soloLista = document.getElementById('fLista').value === 'si';
-  var html = '<tr><th>Super</th><th>Producto</th><th style="text-align:right">Lista</th><th style="text-align:right">Oferta</th><th style="text-align:right">% Dto</th><th>Promo</th><th>De tu lista</th></tr>';
-  D.ofertas.forEach(function(f){
-    if (s && f['Super'] !== s) return;
-    if (soloLista && !f['En tu Lista']) return;
-    var dto = f['% Dto'];
-    var dtoN = dto ? (String(dto).indexOf('%') >= 0 ? parseFloat(dto) : parseFloat(dto) * 100) : 0;
-    html += '<tr><td><span class="badge super" style="background:var(--' + String(f['Super']).toLowerCase() + ')">' + f['Super'] + '</span></td>' +
-      '<td>' + f['Producto'] + '</td>' +
-      '<td class="num">' + fmt(precio(f['Precio lista'])) + '</td>' +
-      '<td class="num"><strong>' + fmt(precio(f['Precio oferta'])) + '</strong></td>' +
-      '<td class="num">' + (dtoN ? dtoN.toFixed(0) + '%' : '—') + '</td>' +
-      '<td style="font-size:12.5px">' + (f['Promo'] || '') + '</td>' +
-      '<td>' + (f['En tu Lista'] ? '<span class="badge">' + f['En tu Lista'] + '</span>' : '') + '</td></tr>';
+function cancelarCorrida(silencioso) {
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'procesarLote') ScriptApp.deleteTrigger(t);
   });
-  document.getElementById('tOfertas').innerHTML = html;
+  PropertiesService.getDocumentProperties().deleteProperty('lote_idx');
+  if (silencioso !== true)
+    SpreadsheetApp.getActiveSpreadsheet().toast('Corrida cancelada.', '🛒 Comparador', 5);
 }
 
-/* ============================ EVENTOS ============================ */
-function eventos(){
-  document.querySelectorAll('.tab').forEach(function(b){
-    b.onclick = function(){
-      document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('activa'); });
-      document.querySelectorAll('.pantalla').forEach(function(x){ x.classList.remove('activa'); });
-      b.classList.add('activa');
-      document.getElementById('tab-' + b.dataset.tab).classList.add('activa');
-    };
+/* ==================== MÓDULO OFERTAS ==================== */
+
+var MAX_OFERTAS_POR_SUPER = 120;
+
+function actualizarOfertas() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var items = leerLista(ss) || [];
+  var toksLista = items.map(function(it) {
+    return { prod: it.prod, toks: tokens(it.prod + ' ' + it.marcas.join(' ')) };
   });
-  document.getElementById('fBusca').oninput = pintarComparacion;
-  document.getElementById('fCat').onchange = pintarComparacion;
+
+  var ofertas = []
+    .concat(ofertasCoto())
+    .concat(ofertasJumbo())
+    .concat(ofertasCarrefour());
+
+  // cruce con tu Lista
+  ofertas.forEach(function(o) {
+    var mejor = '', mejorSc = 0;
+    var nt = tokens(o.nombre);
+    toksLista.forEach(function(t) {
+      var inter = 0;
+      t.toks.forEach(function(tok){ if (nt.indexOf(tok) >= 0) inter++; });
+      var sc = t.toks.length ? inter / Math.min(t.toks.length, 6) : 0;
+      if (sc > mejorSc) { mejorSc = sc; mejor = t.prod; }
+    });
+    o.enLista = mejorSc >= 0.45 ? mejor : '';
+  });
+
+  ofertas.sort(function(a, b){ return (b.dto || 0) - (a.dto || 0); });
+
+  var sh = ss.getSheetByName('Ofertas') || ss.insertSheet('Ofertas');
+  sh.clear();
+  var hoy = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+  var out = [['Fecha', 'Super', 'Producto', 'Precio lista', 'Precio oferta', '% Dto', 'Promo', 'En tu Lista']];
+  ofertas.forEach(function(o) {
+    out.push([hoy, o.superM, o.nombre, o.lista, o.fin, o.dto ? o.dto / 100 : '', o.promo, o.enLista]);
+  });
+  sh.getRange(1, 1, out.length, 8).setValues(out);
+  sh.getRange(1, 1, 1, 8).setFontWeight('bold').setBackground('#efefef');
+  sh.setFrozenRows(1);
+  if (out.length > 1) {
+    sh.getRange(2, 4, out.length - 1, 2).setNumberFormat(FORMATO_PRECIO);
+    sh.getRange(2, 6, out.length - 1, 1).setNumberFormat('0%');
+  }
+  sh.autoResizeColumns(1, 8);
+  ss.toast('Ofertas: ' + ofertas.length + ' (' +
+           ofertas.filter(function(o){ return o.enLista; }).length + ' de tu lista).', '🏷️', 8);
 }
-document.getElementById('btnTema').onclick = function(){
-  document.body.dataset.tema = document.body.dataset.tema === 'claro' ? 'oscuro' : 'claro';
-  coloresTema(); render();
-};
-document.getElementById('btnRecargar').onclick = iniciar;
-iniciar();
-</script>
-</body>
-</html>
+
+/* --- Coto: buscador con filtro sale_type=Todas las Ofertas --- */
+function ofertasCoto() {
+  // Recorre SOLO los rubros de supermercado (nada de indumentaria/hogar)
+  var GRUPOS = { 'catv00001254': 'Almac\u00e9n', 'catv00001255': 'Frescos',
+                 'catv00001296': 'Congelados', 'catv00001257': 'Perfumer\u00eda',
+                 'catv00001258': 'Limpieza' };
+  var out = [], vistos = {};
+  Object.keys(GRUPOS).forEach(function(gid) {
+    for (var pag = 1; pag <= 2; pag++) {
+      if (out.length >= MAX_OFERTAS_POR_SUPER) return;
+      var data = fetchJson('https://ac.cnstrc.com/browse/group_id/' + gid + '?key=' + COTO_KEY +
+        '&i=sheet-ofertas&s=1&num_results_per_page=100&page=' + pag);
+      if (!data || !data.response) break;
+      var rs = data.response.results || [];
+      rs.forEach(function(r) {
+        var d = r.data || {};
+        if (vistos[d.id] || !(d.discounts || []).length) return;
+        vistos[d.id] = 1;
+        var lista = d.product_list_price || ((d.price || [{}])[0].listPrice);
+        var dd = d.discounts[0], fin = lista;
+        var m = String(dd.discountPrice || '').replace(',', '.').match(/[\d.]+/);
+        if (m) fin = parseFloat(m[0]);
+        if (!lista || !fin || fin >= lista) return;
+        out.push({ superM: 'Coto', nombre: String(r.value || '').replace(/&#\d+;/g, ''),
+                   lista: lista, fin: fin,
+                   dto: Math.round((1 - fin / lista) * 100),
+                   promo: [(dd.discountText || ''), (dd.takingText || '')].join(' ').trim() +
+                          '  [' + GRUPOS[gid] + ']' });
+      });
+      Utilities.sleep(400);
+      if (rs.length < 100) break;
+    }
+  });
+  return out.slice(0, MAX_OFERTAS_POR_SUPER);
+}
+
+/* --- Jumbo: colección de ofertas (cluster Im-Precio-Nante) --- */
+function ofertasJumbo() {
+  var out = [];
+  for (var desde = 0; desde < MAX_OFERTAS_POR_SUPER; desde += 50) {
+    var data = fetchJson('https://www.jumbo.com.ar/api/catalog_system/pub/products/search/' +
+                         '?fq=H:46848&_from=' + desde + '&_to=' + (desde + 49));
+    if (!data || !data.length) break;
+    data.forEach(function(p) {
+      try {
+        var offer = p.items[0].sellers[0].commertialOffer;
+        var precio = offer.Price, lista = offer.ListPrice || precio;
+        if (!precio || offer.IsAvailable === false || offer.AvailableQuantity < 1) return;
+        if (lista > precio * 3) lista = precio;
+        var teasers = [];
+        (offer.Teasers || []).concat(offer.PromotionTeasers || []).forEach(function(t) {
+          var n = t.Name || t['<Name>k__BackingField']; if (n) teasers.push(n);
+        });
+        out.push({ superM: 'Jumbo', nombre: p.productName, lista: lista, fin: precio,
+                   dto: lista > precio ? Math.round((1 - precio / lista) * 100) : 0,
+                   promo: teasers.join('; ') || 'Precio oferta' });
+      } catch (e) {}
+    });
+    Utilities.sleep(500);
+    if (data.length < 50) break;
+  }
+  // Fallback: si la coleccion vino vacia (rate-limit o cambio de cluster),
+  // barrer rubros detectando descuentos reales, igual que Carrefour
+  if (!out.length) {
+    ['leche','yogur','aceite','harina','fideos','arroz','galletitas','atun','cafe',
+     'papel higienico','jabon liquido','limpiador','shampoo'].forEach(function(q) {
+      if (out.length >= MAX_OFERTAS_POR_SUPER) return;
+      var d2 = fetchJson('https://www.jumbo.com.ar/api/catalog_system/pub/products/search/?ft=' +
+                         encodeURIComponent(q) + '&_from=0&_to=24');
+      (d2 || []).forEach(function(p) {
+        try {
+          var o = p.items[0].sellers[0].commertialOffer;
+          if (!o.Price || o.IsAvailable === false || o.AvailableQuantity < 1) return;
+          var lst = o.ListPrice || o.Price;
+          if (lst <= o.Price * 1.02 || lst > o.Price * 3) return;
+          out.push({ superM: 'Jumbo', nombre: p.productName, lista: lst, fin: o.Price,
+                     dto: Math.round((1 - o.Price / lst) * 100), promo: 'Dto directo' });
+        } catch (e) {}
+      });
+      Utilities.sleep(400);
+    });
+  }
+  return out.slice(0, MAX_OFERTAS_POR_SUPER);
+}
+
+/* --- Carrefour: barrido por rubro, filtrando descuentos reales --- */
+function ofertasCarrefour() {
+  var rubros = ['leche', 'yogur', 'queso', 'aceite', 'harina', 'fideos', 'arroz',
+                'galletitas', 'atun', 'cafe', 'gaseosa', 'papel higienico',
+                'jabon liquido', 'limpiador', 'shampoo', 'mayonesa'];
+  var out = [], vistos = {};
+  rubros.forEach(function(q) {
+    if (out.length >= MAX_OFERTAS_POR_SUPER) return;
+    var data = fetchJson('https://www.carrefour.com.ar/api/catalog_system/pub/products/search/?ft=' +
+                         encodeURIComponent(q) + '&_from=0&_to=24');
+    if (!data || !data.length) return;
+    Utilities.sleep(350);
+    data.forEach(function(p) {
+      try {
+        if (vistos[p.productId]) return;
+        var offer = p.items[0].sellers[0].commertialOffer;
+        var precio = offer.Price, lista = offer.ListPrice || precio;
+        if (!precio || offer.IsAvailable === false || offer.AvailableQuantity < 1) return;
+        var teasers = [];
+        (offer.Teasers || []).concat(offer.PromotionTeasers || []).forEach(function(t) {
+          var n = t.Name || t['<Name>k__BackingField'];
+          if (n && !/Tarjeta Carrefour/i.test(n)) teasers.push(n);  // la de la tarjeta va en MediosPago
+        });
+        var tieneDto = lista > precio * 1.02;      // al menos 2% para filtrar ruido
+        if (!tieneDto && !teasers.length) return;
+        vistos[p.productId] = 1;
+        out.push({ superM: 'Carrefour', nombre: p.productName, lista: lista, fin: precio,
+                   dto: tieneDto ? Math.round((1 - precio / lista) * 100) : 0,
+                   promo: teasers.join('; ') || (Math.round((1 - precio / lista) * 100) + '% dto directo') });
+      } catch (e) {}
+    });
+  });
+  out.sort(function(a, b){ return b.dto - a.dto; });
+  return out.slice(0, MAX_OFERTAS_POR_SUPER);
+}
